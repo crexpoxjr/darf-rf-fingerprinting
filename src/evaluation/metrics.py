@@ -1,44 +1,57 @@
-import json
-import os
-
 from sklearn.metrics import (
     accuracy_score,
+    precision_score,
+    recall_score,
     f1_score,
-    classification_report,
-    confusion_matrix
+    confusion_matrix,
+    classification_report
 )
 
 
-def evaluate(
-    y_true,
-    y_pred,
-    out="results/metrics.json"
-):
-
-    results={}
-
-
-    results["accuracy"]=accuracy_score(
+def calculate_metrics(
         y_true,
         y_pred
+):
+
+    metrics = {}
+
+
+    metrics["accuracy"] = (
+        accuracy_score(
+            y_true,
+            y_pred
+        )
     )
 
 
-    results["macro_f1"]=f1_score(
-        y_true,
-        y_pred,
-        average="macro"
+    metrics["macro_f1"] = (
+        f1_score(
+            y_true,
+            y_pred,
+            average="macro"
+        )
     )
 
 
-    results["report"]=classification_report(
-        y_true,
-        y_pred,
-        output_dict=True
+    metrics["precision"] = (
+        precision_score(
+            y_true,
+            y_pred,
+            average=None
+        ).tolist()
     )
 
 
-    results["confusion_matrix"]=(
+    metrics["recall"] = (
+        recall_score(
+            y_true,
+            y_pred,
+            average=None
+        ).tolist()
+    )
+
+
+    metrics["confusion_matrix"] = (
         confusion_matrix(
             y_true,
             y_pred
@@ -46,22 +59,13 @@ def evaluate(
     )
 
 
-    os.makedirs(
-        "results",
-        exist_ok=True
+    metrics["classification_report"] = (
+        classification_report(
+            y_true,
+            y_pred,
+            output_dict=True
+        )
     )
 
 
-    with open(
-        out,
-        "w"
-    ) as f:
-
-        json.dump(
-            results,
-            f,
-            indent=4
-        )
-
-
-    return results
+    return metrics
