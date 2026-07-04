@@ -10,10 +10,10 @@ def generate_device_signal(
     t = np.arange(samples)
 
 
-    # Device fingerprint parameters
-    cfo = device_id * 0.001
-    phase = device_id * 0.2
-    amplitude = 1 + device_id * 0.05
+    # Device fingerprint parameters with randomness
+    cfo = device_id * 0.001 + np.random.randn() * 0.0005  # Add jitter
+    phase = device_id * 0.2 + np.random.randn() * 0.1     # Random phase offset
+    amplitude = 1 + device_id * 0.05 + np.random.randn() * 0.02  # Random amplitude
 
 
     iq = (
@@ -28,11 +28,12 @@ def generate_device_signal(
     )
 
 
+    # Add higher noise floor (harder problem)
     noise = (
         np.random.randn(samples)
         +
         1j*np.random.randn(samples)
-    ) * 0.05
+    ) * 0.15  # Increased from 0.05 to 0.15
 
 
     iq += noise
