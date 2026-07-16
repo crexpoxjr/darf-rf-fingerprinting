@@ -103,17 +103,28 @@ class OracleConverter:
         annotations = meta.get("_metadata", {}).get("annotations", [{}])
         sample_count = annotations[0].get("core:sample_count", None)
 
-        # Read binary data (cf32 = complex float32)
-        if datatype == "cf32":
-            iq_data = np.fromfile(
-                data_file,
-                dtype=np.complex64
-            )
-        else:
-            raise ValueError(f"Unsupported datatype: {datatype}")
+        # The ORACLE SigMF files in this repository advertise cf32, but the
+        # binary payloads are actually stored as complex128 values (16 bytes per
+        # sample). Reading them as complex64 corrupts the data by producing the
+        # wrong number of samples. We infer the correct dtype from the file size
+        # when possible and fall back to complex128 for ORACLE data.
+        inferred_dtype = np.complex128
+        if sample_count is not None:
+            file_size = data_file.stat().st_size
+            if file_size % sample_count == 0:
+                bytes_per_sample = file_size // sample_count
+                if bytes_per_sample == 8:
+                    inferred_dtype = np.complex64
+                elif bytes_per_sample == 16:
+                    inferred_dtype = np.complex128
+
+        iq_data = np.fromfile(data_file, dtype=inferred_dtype)
 
         if sample_count and len(iq_data) != sample_count:
-            print(f"Warning: expected {sample_count} samples, got {len(iq_data)}")
+            print(
+                f"Warning: expected {sample_count} samples from metadata, "
+                f"got {len(iq_data)} with dtype {inferred_dtype}"
+            )
 
         # Extract filename metadata
         filename_meta = self.parse_filename(meta_file.name)
@@ -122,6 +133,7 @@ class OracleConverter:
             "sample_rate": sample_rate,
             "sample_count": len(iq_data),
             "datatype": datatype,
+            "dtype_used": str(inferred_dtype),
             **filename_meta,
             "file": meta_file.name
         }
@@ -129,7 +141,7 @@ class OracleConverter:
     def create_windows(
         self,
         signal: np.ndarray
-    ) -> List[np.ndarray]:
+    ) -> List[Tuple[np.ndarray, int, int]]:
         """
         Create sliding windows from signal.
 
@@ -137,7 +149,7 @@ class OracleConverter:
             signal: 1D complex array of I/Q samples
 
         Returns:
-            List of windowed signals (window_size,)
+            List of (window, start, end) tuples
         """
         windows = []
         num_windows = (len(signal) - self.window_size) // self.stride + 1
@@ -145,7 +157,7 @@ class OracleConverter:
         for i in range(num_windows):
             start = i * self.stride
             end = start + self.window_size
-            windows.append(signal[start:end])
+            windows.append((signal[start:end], start, end))
 
         return windows
 
@@ -181,6 +193,7 @@ class OracleConverter:
         """
         all_signals = []
         all_labels = []
+        window_metadata = []
         device_to_label = {}
         next_label = 0
 
@@ -203,11 +216,24 @@ class OracleConverter:
                 # Create windows
                 windows = self.create_windows(iq_signal)
 
-                for window in windows:
+                for window, start, end in windows:
                     # Convert to I/Q channels
                     channels = self.signal_to_channels(window)
                     all_signals.append(channels)
                     all_labels.append(label)
+                    window_metadata.append({
+                        "dataset_name": "oracle",
+                        "device_id": device_id,
+                        "source_file": meta_file.name,
+                        "run": meta["run"],
+                        "imbalance": meta["imbalance"],
+                        "window_start": int(start),
+                        "window_end": int(end),
+                        "window_length": self.window_size,
+                        "stride": self.stride,
+                        "label": int(label),
+                        "split": None,
+                    })
 
                 print(f"  ✓ {meta_file.name}: {len(windows)} windows")
 
@@ -218,6 +244,7 @@ class OracleConverter:
         # Stack into arrays
         X = np.stack(all_signals, axis=0)
         y = np.array(all_labels)
+        self.window_metadata = self.assign_window_splits(window_metadata)
 
         print(f"\nDataset created:")
         print(f"  X shape: {X.shape} (samples, channels, time)")
@@ -227,12 +254,63 @@ class OracleConverter:
 
         return X, y, device_to_label
 
+    def assign_window_splits(self, window_metadata: List[Dict], split_config: Dict | None = None, seed: int = 42) -> List[Dict]:
+        """Assign each source file to a split to avoid leakage across train/test windows."""
+        if not window_metadata:
+            return []
+
+        split_config = split_config or {
+            "protocol": "grouped_by_source_file",
+            "train": 0.7,
+            "val": 0.1,
+            "test": 0.2,
+        }
+        if split_config.get("protocol") != "grouped_by_source_file":
+            return window_metadata
+
+        train_ratio = float(split_config.get("train", 0.7))
+        val_ratio = float(split_config.get("val", 0.1))
+        test_ratio = float(split_config.get("test", 0.2))
+        total = train_ratio + val_ratio + test_ratio
+        if total <= 0:
+            raise ValueError("Split ratios must sum to a positive value")
+
+        train_ratio /= total
+        val_ratio /= total
+        test_ratio /= total
+
+        source_files = sorted({record["source_file"] for record in window_metadata})
+        rng = np.random.default_rng(seed)
+        shuffled_sources = rng.permutation(source_files)
+
+        train_count = max(1, int(np.floor(len(shuffled_sources) * train_ratio))) if len(shuffled_sources) > 1 else 1
+        val_count = max(0, int(np.floor(len(shuffled_sources) * val_ratio))) if len(shuffled_sources) > 1 else 0
+        test_count = len(shuffled_sources) - train_count - val_count
+        if test_count < 1 and len(shuffled_sources) > 1:
+            test_count = 1
+            if train_count + val_count + test_count > len(shuffled_sources):
+                train_count = max(1, train_count - 1)
+
+        split_for_source = {}
+        for source in shuffled_sources[:train_count]:
+            split_for_source[source] = "train"
+        for source in shuffled_sources[train_count:train_count + val_count]:
+            split_for_source[source] = "val"
+        for source in shuffled_sources[train_count + val_count:train_count + val_count + test_count]:
+            split_for_source[source] = "test"
+
+        for record in window_metadata:
+            record["split"] = split_for_source.get(record["source_file"], "test")
+
+        return window_metadata
+
     def save_dataset(
         self,
         X: np.ndarray,
         y: np.ndarray,
         device_mapping: Dict,
-        output_dir: Path
+        output_dir: Path,
+        window_metadata: List[Dict] | None = None,
     ) -> None:
         """
         Save converted dataset to numpy files.
@@ -253,6 +331,11 @@ class OracleConverter:
         # Save metadata
         with open(output_dir / "device_mapping.json", 'w') as f:
             json.dump(device_mapping, f, indent=2)
+
+        manifest = window_metadata if window_metadata is not None else getattr(self, "window_metadata", [])
+        if manifest:
+            with open(output_dir / "split_manifest.json", 'w') as f:
+                json.dump(manifest, f, indent=2)
 
         # Save info
         info = {

@@ -44,9 +44,10 @@ def validate_dataset(X: np.ndarray, y: np.ndarray, device_mapping: Dict) -> bool
     if X.shape[1] != 2:
         errors.append(f"Expected 2 channels, got {X.shape[1]}")
     
-    # Check data types
-    if X.dtype != np.float32:
-        errors.append(f"Expected float32, got {X.dtype}")
+    # Check data types. The ORACLE raw payloads are read as complex128 in this
+    # repository, so the converted I/Q channels are expected to be float64.
+    if X.dtype != np.float64:
+        errors.append(f"Expected float64 converted I/Q channels, got {X.dtype}")
     
     if y.dtype not in [np.int32, np.int64, int]:
         errors.append(f"Expected integer labels, got {y.dtype}")
@@ -82,6 +83,8 @@ def print_statistics(X: np.ndarray, y: np.ndarray, device_mapping: Dict):
     print(f"\nShape and Size:")
     print(f"  X shape: {X.shape} (samples, channels, time)")
     print(f"  y shape: {y.shape}")
+    print(f"  X dtype: {X.dtype}")
+    print(f"  y dtype: {y.dtype}")
     print(f"  Total samples: {len(X):,}")
     print(f"  Memory: {X.nbytes / 1024 / 1024:.1f} MB")
     
@@ -166,6 +169,8 @@ def save_report(
         f.write("-" * 70 + "\n")
         f.write(f"X shape: {X.shape}\n")
         f.write(f"y shape: {y.shape}\n")
+        f.write(f"X dtype: {X.dtype}\n")
+        f.write(f"y dtype: {y.dtype}\n")
         f.write(f"Total samples: {len(X)}\n")
         f.write(f"Total memory: {X.nbytes / 1024 / 1024:.1f} MB\n\n")
         

@@ -11,6 +11,7 @@ The **ORACLE dataset** (from INFOCOM 2019) contains WiFi transmissions collected
 - **Hardware**: Ettus USRP B210 receivers, X310 transmitters
 - **Samples**: Complex I/Q pairs at 5 MHz sample rate
 - **Controlled Impairments**: Intentional IQ imbalances enable fingerprinting
+- **Parsing note**: The ORACLE SigMF metadata in this repository says `cf32`, but the provided binary `.sigmf-data` files are actually stored as complex128 values. Reading them as `complex64` corrupts the samples and produces the wrong sample count. The converter now infers the correct dtype from the file size and uses `complex128` for the ORACLE files in this project.
 
 ## Files
 
@@ -117,6 +118,8 @@ datasets/oracle/
 ### I/Q Channel Separation
 
 Raw SigMF data contains complex samples: `z = I + jQ`
+
+Important parsing note: the ORACLE `.sigmf-data` files in this project are read as `complex128` even though the SigMF metadata declares `cf32`. The byte size of the files corresponds to 16 bytes per sample (two 8-byte floating-point values), which matches `complex128`. Reading as `complex64` produces the wrong sample count and corrupts the waveform.
 
 Conversion creates:
 ```

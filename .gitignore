@@ -4,8 +4,11 @@
 #Exclude the pychache folders
 __pycache__/
 
-#Exclude datasets and large data arrays
+#Exclude datasets, models, and large data arrays
 KRI-16IQImbalances-DemodulatedData/
 datasets/oracle/
-src/datasets/dataset2/
 results/
+src/datasets/WiSig
+
+#Exclude report files
+oracle_report.txt

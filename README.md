@@ -1,252 +1,127 @@
 # DARF RF Fingerprinting
 
-Device Analog/RF Fingerprint Classification.
+Device analog/RF fingerprint classification using ORACLE SigMF recordings.
 
 ## Goal
 
-Build a robust neural network architecture that consistently classifies wireless transmitters using unique RF imperfections.
+Build a reproducible RF fingerprinting pipeline that:
 
-## Pipeline
-
-Synthetic I/Q -> Dataset Loader -> CNN Classifier -> Metrics + Robustness Testing
+- converts ORACLE raw SigMF files to model-ready I/Q windows,
+- uses a leakage-aware grouped split protocol,
+- trains a 1D CNN, and
+- saves complete research artifacts for each run.
 
 ## Installation
 
-From the repository root, create and activate a Python virtual environment:
+From the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-Install the project dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-If you are using PyCharm, select `.venv/bin/python` as the project interpreter after installing the dependencies.
+## Current ORACLE Pipeline
 
-## Week 1
+1. Convert raw SigMF recordings to `X.npy` / `y.npy` with per-window metadata.
+2. Build grouped train/val/test partitions by source recording.
+3. Train CNN from YAML config.
+4. Save metrics and artifacts for reproducibility.
 
-Verify the toy signal generator:
+Main components:
 
-```bash
-python3 -m src.toy_generator
-```
+- `oracle_dataset_runner.py`: conversion entry point
+- `src/datasets/oracle_converter.py`: SigMF parse + windowing + split manifest
+- `src/datasets/oracle_loader.py`: DataLoader and split-manifest-aware partitioning
+- `src/training/train.py`: config-driven training + artifact generation
+- `train_oracle_cnn.py`: compatibility wrapper (delegates to `src/training/train.py`)
+- `validate_oracle_dataset.py`: converted dataset validation
 
-Verify the dataset loader:
+## Dtype Note (Important)
 
-```bash
-python3 test_dataset.py
-```
+Although ORACLE metadata may advertise `cf32`, these files are parsed using an inferred raw dtype and in this repository are read as `complex128` (based on file-size/sample-count checks). The resulting converted I/Q channels are therefore `float64`.
 
-Train the baseline CNN and save metrics:
+`validate_oracle_dataset.py` has been updated accordingly and now validates `X` as `float64`.
 
-```bash
-python3 -m src.training.train
-```
+## Quick Start
 
-The training command writes the Week 1 metrics file here:
-
-```text
-results/week1_toy_cnn/metrics.json
-```
-
-## Week 2
-
-# ORACLE Dataset Quick Start Guide
-
-## 📋 Overview
-
-Three Python scripts to convert and use the ORACLE RF fingerprinting dataset:
-
-| Script | Purpose |
-|--------|---------|
-| `oracle_dataset_runner.py` | Main entry point - converts SigMF files to numpy arrays |
-| `src/datasets/oracle_converter.py` | Core conversion logic (called by runner) |
-| `src/datasets/oracle_loader.py` | PyTorch DataLoader integration |
-| `validate_oracle_dataset.py` | Verify and analyze converted dataset |
-
-## 🚀 Quick Start
-
-### 1. Convert Dataset (Only do this with new datasets)
+### 1. Convert and test loader
 
 ```bash
 python oracle_dataset_runner.py --test-loader
 ```
 
-This will:
-- Read all `.sigmf-meta` and `.sigmf-data` files
-- Extract device IDs and create I/Q channel pairs
-- Generate sliding windows (256 samples, 50% overlap)
-- Save to `datasets/oracle/` (numpy format)
-- Test the DataLoader
-
-**Output**: `X.npy`, `y.npy`, `device_mapping.json`, `dataset_info.json`
-
-### 2. Validate Dataset
+### 2. Validate conversion
 
 ```bash
 python validate_oracle_dataset.py --report oracle_report.txt
 ```
 
-Shows:
-- Dataset shape and memory usage
-- Class distribution
-- Signal statistics (mean, std, min, max)
-- Per-device characteristics
-
-### 3. Use in Training
-
-```python
-from src.datasets.oracle_loader import load_oracle_dataset
-
-# Load data
-train_loader, test_loader, metadata = load_oracle_dataset(
-    dataset_dir="./datasets/oracle",
-    batch_size=32,
-    split_ratio=0.8
-)
-
-# Train model
-for epoch in range(10):
-    for batch in train_loader:
-        x = batch['x']              # Shape: (32, 2, 256)
-        y = batch['y']              # Shape: (32,)
-        
-        # Forward pass through CNN
-        pred = model(x)
-        loss = criterion(pred, y)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-```
-
-## 📊 Data Format
-
-### Input Format (SigMF)
-
-Raw RF recordings in Signal Metadata Format:
-- **Files**: `*.sigmf-meta` (JSON metadata) + `*.sigmf-data` (binary)
-- **Data Type**: Complex float32 (I + jQ)
-- **Sample Rate**: 5 MHz
-- **Format**: `Demod_WiFi_cable_X310_<DEVICE>_IQ#<IMBALANCE>_run<RUN>.sigmf-*`
-
-### Output Format (Numpy)
-
-Training-ready arrays:
-```python
-X.shape = (num_samples, 2, 256)    # I/Q channels × time samples
-y.shape = (num_samples,)            # Class labels
-```
-
-**Normalization**: Applied automatically in DataLoader (z-score per sample)
-
-## 🔧 Customization
-
-### Adjust Window Parameters
+### 3. Train ORACLE CNN (recommended)
 
 ```bash
-python oracle_dataset_runner.py \
-    --window-size 512 \              # Longer windows
-    --stride 256                      # More overlap
+python -m src.training.train --config configs/oracle_cnn.yaml
 ```
 
-### Change Output Location
+### 4. Backward-compatible training command
 
 ```bash
-python oracle_dataset_runner.py \
-    --output-dir /path/to/datasets/oracle
+python train_oracle_cnn.py
 ```
 
-### Load with Custom Settings
+This now runs the same config-driven ORACLE pipeline as step 3.
 
-```python
-train_loader, test_loader, meta = load_oracle_dataset(
-    dataset_dir="./datasets/oracle",
-    split_ratio=0.7,                 # 70% train, 30% test
-    batch_size=64,                   # Larger batches
-    shuffle_train=True,
-    num_workers=4                    # Parallel loading
-)
+## Split Protocol
+
+Configured in `configs/oracle_cnn.yaml`:
+
+```yaml
+dataset:
+  split:
+    protocol: grouped_by_source_file
+    train: 0.7
+    val: 0.1
+    test: 0.2
 ```
 
-## 📈 Dataset Statistics
+Windows from the same source recording are assigned to only one partition to reduce leakage risk.
 
-Current ORACLE Dataset (dataset2):
+The explicit split is saved in:
 
-```
-├─ Total files: 32 SigMF pairs
-├─ Samples per file: ~2.2M complex samples
-├─ Unique devices: 2-3
-├─ IQ imbalance levels: 20+
-├─ Windows @ 256 samples, 50% overlap: ~2,500-5,000
-└─ Memory (full dataset): ~200-400 MB
-```
+- `datasets/oracle/split_manifest.json`
+- copied to `results/oracle_cnn/split_manifest.json`
 
-**Class Distribution** (after conversion):
-```
-Device 3123D76 (Transmitter 1): ~50%
-Device ...    (Transmitter 2): ~50%
-```
+Each manifest entry includes fields such as dataset name, device ID, source file, run, imbalance, window start/end, window length, stride, label, and split.
 
-## ⚠️ Troubleshooting
+## Per-Run Artifacts
 
-### Issue: "ORACLE directory not found"
-```
-Solution: Ensure data is at:
-src/datasets/ORACLE/dataset2/KRI-16IQImbalances-DemodulatedData/
-```
+Each ORACLE training run writes to `results/oracle_cnn/`:
 
-### Issue: ".sigmf-data file not found"
-```
-Solution: Both .sigmf-meta and .sigmf-data must exist for each recording
-```
+- `config.yaml`
+- `metrics.json`
+- `confusion_matrix.png`
+- `confusion_matrix.csv`
+- `training_curves.png`
+- `split_manifest.json`
+- `oracle_cnn.pt`
 
-### Issue: "Unsupported datatype cf32"
-```
-Solution: Only complex float32 is supported. Check SigMF metadata version.
-```
+`metrics.json` includes:
 
-### Issue: Out of memory during conversion
-```
-Solution 1: Increase window stride (fewer samples created)
-Solution 2: Reduce window size
-Solution 3: Process smaller subset of files
-```
+- `accuracy`
+- `macro_f1`
+- `precision`
+- `recall`
+- `confusion_matrix`
+- `classification_report`
+- dataset metadata
+- training metadata (epochs, batch size, learning rate, final loss)
+- run metadata (`random_seed`, `git_commit`, device)
 
-## 📚 File Structure After Conversion
+## Notes on Current Results
 
-```
-darf-rf-fingerprinting/
-├── oracle_dataset_runner.py              # Main script
-├── validate_oracle_dataset.py            # Validation script
-├── ORACLE_DATASET_README.md              # Detailed guide
-└── src/datasets/
-    ├── oracle_converter.py               # Core converter
-    ├── oracle_loader.py                  # PyTorch loader
-    ├── ORACLE/
-    │   └── dataset2/
-    │       └── KRI-16IQImbalances-DemodulatedData/
-    │           ├── *.sigmf-meta          # Raw input files
-    │           ├── *.sigmf-data
-    │           └── ...
-    └── (after conversion)
-        └── oracle/
-            ├── X.npy                     # Converted I/Q samples
-            ├── y.npy                     # Class labels
-            ├── device_mapping.json       # Device ID → class
-            └── dataset_info.json         # Metadata
-```
+If your subset currently has only one device class, you may observe near-perfect metrics and a 1x1 confusion matrix. This is expected for single-class evaluation and should not be interpreted as strong multi-device fingerprinting performance.
 
-## 📖 References
+## References
 
-- **ORACLE Dataset Paper**: [Sankhe et al., INFOCOM 2019](https://genesys-lab.org/oracle)
-- **SigMF Format**: [Signal Metadata Format Specification](https://sigmf.io/)
-- **USRP Hardware**: [Ettus Research USRP Documentation](https://www.ettus.com/product/)
-
----
-
-**Questions?** Check `ORACLE_DATASET_README.md` in the./src/datasets directory for technical details.
+- ORACLE dataset: https://genesys-lab.org/oracle
+- SigMF: https://sigmf.io/

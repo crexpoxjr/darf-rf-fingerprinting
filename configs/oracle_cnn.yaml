@@ -1,0 +1,22 @@
+dataset:
+  name: oracle
+  path: src/datasets/ORACLE/dataset2/KRI-16IQImbalances-DemodulatedData
+  window_length: 256
+  channels: 2
+  normalize: true
+  split:
+    protocol: grouped_by_source_file
+    train: 0.7
+    val: 0.1
+    test: 0.2
+  batch_size: 32
+  seed: 42
+
+model:
+  name: cnn1d
+  classes: 2
+
+training:
+  learning_rate: 0.001
+  epochs: 10
+  output_dir: results/oracle_cnn
