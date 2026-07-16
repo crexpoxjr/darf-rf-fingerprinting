@@ -1,8 +1,11 @@
 dataset:
   name: oracle
-  path: src/datasets/ORACLE/dataset2/KRI-16IQImbalances-DemodulatedData
+  path: src/datasets/ORACLE/dataset1/neu_m044q5210
   window_length: 256
   channels: 2
+  max_classes: 16
+  max_windows_per_recording: 512
+  output_dtype: float64
   normalize: true
   split:
     protocol: grouped_by_source_file
@@ -14,9 +17,9 @@ dataset:
 
 model:
   name: cnn1d
-  classes: 2
+  classes: 16
 
 training:
-  learning_rate: 0.001
-  epochs: 10
+  learning_rate: 0.003
+  epochs: 40
   output_dir: results/oracle_cnn

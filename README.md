@@ -93,6 +93,77 @@ The explicit split is saved in:
 
 Each manifest entry includes fields such as dataset name, device ID, source file, run, imbalance, window start/end, window length, stride, label, and split.
 
+## Config Guide
+
+Use `configs/oracle_cnn.yaml` as the single source of truth for conversion + training.
+
+### Class Cap
+
+Set the class/device cap in `dataset.max_classes`:
+
+```yaml
+dataset:
+  max_classes: 8
+```
+
+Important: keep `model.classes` equal to the effective dataset class count.
+
+```yaml
+model:
+  classes: 8
+```
+
+If these differ, training can become inconsistent or silently underperform.
+
+### Memory and Dataset Size Controls
+
+For dataset1, use these controls to avoid OOM during conversion:
+
+```yaml
+dataset:
+  path: src/datasets/ORACLE/dataset1/neu_m044q5210
+  max_classes: 8
+  max_windows_per_recording: 512
+  output_dtype: float32
+  max_dataset_gib: 8.0
+```
+
+- `max_windows_per_recording`: down-samples windows per SigMF file.
+- `output_dtype`: `float32` uses less memory than `float64`.
+- `max_dataset_gib`: fail-fast guard before oversized conversion.
+
+### Split Settings
+
+Use grouped split for leakage safety and class coverage:
+
+```yaml
+dataset:
+  split:
+    protocol: grouped_by_source_file
+    train: 0.7
+    val: 0.1
+    test: 0.2
+```
+
+The converter writes `datasets/oracle/split_manifest.json` with per-window fields:
+- `dataset_name`, `device_id`, `source_file`, `run`
+- `window_start`, `window_end`, `window_length`, `stride`
+- `label`, `split`
+- ORACLE conditions when available: `imbalance`, `distance`, `distance_ft`
+
+### CLI Overrides (Optional)
+
+You can override config values when converting:
+
+```bash
+python oracle_dataset_runner.py \
+  --config configs/oracle_cnn.yaml \
+  --max-classes 8 \
+  --max-windows-per-recording 512 \
+  --output-dtype float32 \
+  --max-dataset-gib 8.0
+```
+
 ## Per-Run Artifacts
 
 Each ORACLE training run writes to `results/oracle_cnn/`:

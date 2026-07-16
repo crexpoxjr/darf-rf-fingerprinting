@@ -114,24 +114,51 @@ def save_training_curves_png(losses: list, output_path: Path) -> None:
 
 def build_oracle_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[DataLoader, DataLoader, Dict[str, Any]]:
     dataset_cfg = config["dataset"]
+    model_cfg = config.get("model", {})
     dataset_path = resolve_path(dataset_cfg["path"], project_root)
 
     if not dataset_path.exists():
         raise FileNotFoundError(f"ORACLE dataset path does not exist: {dataset_path}")
 
+    # If dataset.max_classes is not set, default to model.classes to avoid
+    # converting more devices than the classifier head can represent.
+    max_classes_cfg = dataset_cfg.get("max_classes")
+    if max_classes_cfg is None:
+        max_classes_cfg = model_cfg.get("classes")
+
     converter = OracleConverter(
         oracle_dir=dataset_path,
         window_size=int(dataset_cfg.get("window_length", 256)),
         stride=int(dataset_cfg.get("window_length", 256) // 2),
+        max_classes=(
+            int(max_classes_cfg)
+            if max_classes_cfg is not None
+            else None
+        ),
+        max_windows_per_recording=(
+            int(dataset_cfg["max_windows_per_recording"])
+            if dataset_cfg.get("max_windows_per_recording") is not None
+            else None
+        ),
+        output_dtype=str(dataset_cfg.get("output_dtype", "float32")),
+        max_dataset_gib=float(dataset_cfg.get("max_dataset_gib", 8.0)),
     )
-
-    X, y, device_mapping = converter.convert_dataset()
-    output_dir = resolve_path(dataset_cfg.get("output_dir", "datasets/oracle"), project_root)
-    converter.save_dataset(X, y, device_mapping, output_dir, window_metadata=converter.window_metadata)
 
     split_config = dataset_cfg.get("split", 0.8)
     if isinstance(split_config, (int, float)):
-        split_config = {"protocol": "random", "train": float(split_config), "val": 0.0, "test": max(0.0, 1.0 - float(split_config))}
+        split_config = {
+            "protocol": "grouped_by_source_file",
+            "train": float(split_config),
+            "val": 0.0,
+            "test": max(0.0, 1.0 - float(split_config)),
+        }
+
+    X, y, device_mapping = converter.convert_dataset(
+        split_config=split_config,
+        seed=int(dataset_cfg.get("seed", 42)),
+    )
+    output_dir = resolve_path(dataset_cfg.get("output_dir", "datasets/oracle"), project_root)
+    converter.save_dataset(X, y, device_mapping, output_dir, window_metadata=converter.window_metadata)
 
     train_loader, test_loader, metadata = load_rfdataset(
         output_dir,
@@ -159,7 +186,13 @@ def main() -> None:
 
     train_loader, test_loader, metadata = build_oracle_loaders(config, project_root)
 
-    num_classes = int(config["model"].get("classes", metadata.get("num_classes", 2)))
+    configured_classes = config["model"].get("classes")
+    num_classes = metadata.get("num_classes", 2)
+    if configured_classes is not None and int(configured_classes) != num_classes:
+        print(
+            f"Warning: model.classes={configured_classes} does not match dataset classes={num_classes}. "
+            f"Using dataset class count instead."
+        )
     model = RF_CNN(classes=num_classes)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
     loss_fn = torch.nn.CrossEntropyLoss()

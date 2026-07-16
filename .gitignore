@@ -6,6 +6,7 @@ __pycache__/
 
 #Exclude datasets, models, and large data arrays
 KRI-16IQImbalances-DemodulatedData/
+neu_m044q5210/
 datasets/oracle/
 results/
 src/datasets/WiSig

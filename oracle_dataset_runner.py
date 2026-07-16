@@ -23,6 +23,18 @@ def main():
         description="Convert ORACLE SigMF dataset to training format"
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional YAML config (e.g., configs/oracle_cnn.yaml) to read dataset.path"
+    )
+    parser.add_argument(
+        "--oracle-dir",
+        type=Path,
+        default=None,
+        help="Raw ORACLE root directory. Overrides path from --config/default"
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -41,6 +53,30 @@ def main():
         help="Stride between windows (default: 128)"
     )
     parser.add_argument(
+        "--max-classes",
+        type=int,
+        default=None,
+        help="Optional cap on the number of devices/classes to convert"
+    )
+    parser.add_argument(
+        "--max-windows-per-recording",
+        type=int,
+        default=None,
+        help="Optional cap on windows emitted per SigMF recording"
+    )
+    parser.add_argument(
+        "--output-dtype",
+        type=str,
+        default="float32",
+        help="Stored dtype for converted I/Q channels (default: float32)"
+    )
+    parser.add_argument(
+        "--max-dataset-gib",
+        type=float,
+        default=8.0,
+        help="Abort if estimated X size exceeds this and no window cap is set"
+    )
+    parser.add_argument(
         "--test-loader",
         action="store_true",
         help="Test loading dataset after conversion"
@@ -50,10 +86,53 @@ def main():
 
     # Determine paths
     project_root = Path(__file__).parent
-    oracle_data = (
-        project_root / 
+
+    config_oracle_path = None
+    config_model_classes = None
+    config_dataset_max_classes = None
+    config_dataset_max_windows = None
+    config_dataset_output_dtype = None
+    config_dataset_max_gib = None
+    if args.config is not None:
+        import yaml
+
+        config_path = args.config if args.config.is_absolute() else project_root / args.config
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        config_oracle_path = config.get("dataset", {}).get("path")
+        config_model_classes = config.get("model", {}).get("classes")
+        config_dataset_max_classes = config.get("dataset", {}).get("max_classes")
+        config_dataset_max_windows = config.get("dataset", {}).get("max_windows_per_recording")
+        config_dataset_output_dtype = config.get("dataset", {}).get("output_dtype")
+        config_dataset_max_gib = config.get("dataset", {}).get("max_dataset_gib")
+
+    oracle_data = args.oracle_dir or config_oracle_path or (
         "src/datasets/ORACLE/dataset2/KRI-16IQImbalances-DemodulatedData"
     )
+    oracle_data = Path(oracle_data)
+    if not oracle_data.is_absolute():
+        oracle_data = project_root / oracle_data
+
+    effective_max_classes = args.max_classes
+    if effective_max_classes is None:
+        if config_dataset_max_classes is not None:
+            effective_max_classes = int(config_dataset_max_classes)
+        elif config_model_classes is not None:
+            effective_max_classes = int(config_model_classes)
+
+    effective_max_windows = args.max_windows_per_recording
+    if effective_max_windows is None and config_dataset_max_windows is not None:
+        effective_max_windows = int(config_dataset_max_windows)
+
+    effective_output_dtype = args.output_dtype
+    if effective_output_dtype == "float32" and config_dataset_output_dtype is not None:
+        effective_output_dtype = str(config_dataset_output_dtype)
+
+    effective_max_dataset_gib = args.max_dataset_gib
+    if config_dataset_max_gib is not None and args.max_dataset_gib == 8.0:
+        effective_max_dataset_gib = float(config_dataset_max_gib)
+
     output_dir = args.output_dir or (project_root / "datasets/oracle")
 
     print("=" * 70)
@@ -71,6 +150,11 @@ def main():
     print(f"Output: {output_dir}")
     print(f"Window size: {args.window_size} samples")
     print(f"Stride: {args.stride} samples")
+    if effective_max_classes is not None:
+        print(f"Max classes: {effective_max_classes}")
+    if effective_max_windows is not None:
+        print(f"Max windows/recording: {effective_max_windows}")
+    print(f"Output dtype: {effective_output_dtype}")
 
     # Convert dataset
     try:
@@ -78,7 +162,11 @@ def main():
         converter = OracleConverter(
             oracle_dir=oracle_data,
             window_size=args.window_size,
-            stride=args.stride
+            stride=args.stride,
+            max_classes=effective_max_classes,
+            max_windows_per_recording=effective_max_windows,
+            output_dtype=effective_output_dtype,
+            max_dataset_gib=effective_max_dataset_gib,
         )
 
         print("\n[2/3] Converting dataset...")
