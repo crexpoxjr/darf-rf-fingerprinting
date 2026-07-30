@@ -27,8 +27,8 @@ def _coerce_to_channels_time(X: np.ndarray, window_size: int = 256) -> np.ndarra
     if arr.shape[1] != 2 and arr.shape[2] == 2:
         arr = np.transpose(arr, (0, 2, 1))
 
-    if arr.shape[1] != 2:
-        raise ValueError(f"Expected 2 channels, got shape {arr.shape}")
+    if arr.shape[1] < 2:
+        raise ValueError(f"Expected at least 2 channels, got shape {arr.shape}")
 
     if arr.shape[2] != window_size:
         if arr.shape[2] > window_size:
@@ -50,13 +50,20 @@ class OracleRFDataset(Dataset):
         y: np.ndarray,
         device_mapping: Dict[str, int],
         window_size: int = 256,
-        normalize: bool = True
+        normalize: bool = True,
+        channels: int = 2,
+        channel_mode: str = "iq",
     ):
         self.X = _coerce_to_channels_time(X, window_size=window_size)
         self.y = np.asarray(y)
         self.device_mapping = device_mapping
         self.window_size = window_size
         self.normalize = normalize
+        self.channels = int(channels)
+        self.channel_mode = str(channel_mode)
+
+        if self.channels not in {2, 4}:
+            raise ValueError(f"Supported channels are 2 or 4, got {self.channels}")
 
         if self.X.shape[0] != self.y.shape[0]:
             raise ValueError(
@@ -71,6 +78,19 @@ class OracleRFDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict:
         signal = self.X[index].astype(np.float32)
+
+        if self.channels == 4:
+            if signal.shape[0] < 2:
+                raise ValueError(f"Cannot build 4 channels from shape {signal.shape}")
+
+            i = signal[0]
+            q = signal[1]
+            magnitude = np.sqrt(np.square(i) + np.square(q))
+            phase = np.arctan2(q, i)
+            signal = np.stack([i, q, magnitude, phase], axis=0)
+        else:
+            signal = signal[:2]
+
         label = int(self.y[index])
 
         if self.normalize:
@@ -204,6 +224,8 @@ def _build_loaders(
     num_workers: int = 0,
     window_size: int = 256,
     normalize: bool = True,
+    channels: int = 2,
+    channel_mode: str = "iq",
     source_name: str = "dataset",
     split_manifest: list | None = None,
     split_config: Dict | None = None,
@@ -230,6 +252,8 @@ def _build_loaders(
         device_mapping,
         window_size=window_size,
         normalize=normalize,
+        channels=channels,
+        channel_mode=channel_mode,
     )
     test_dataset = OracleRFDataset(
         X_eval,
@@ -237,6 +261,8 @@ def _build_loaders(
         device_mapping,
         window_size=window_size,
         normalize=normalize,
+        channels=channels,
+        channel_mode=channel_mode,
     )
 
     train_loader = DataLoader(
@@ -259,7 +285,9 @@ def _build_loaders(
         "num_classes": len(device_mapping),
         "device_mapping": device_mapping,
         "window_size": window_size,
-        "input_shape": X_train[0].shape,
+        "input_shape": tuple(train_dataset[0]["x"].shape),
+        "channels": channels,
+        "channel_mode": channel_mode,
         "source": source_name,
         "split_manifest": split_manifest is not None,
         "split_config": split_config,
@@ -276,6 +304,8 @@ def load_rfdataset(
     num_workers: int = 0,
     window_size: int = 256,
     normalize: bool = True,
+    channels: int = 2,
+    channel_mode: str = "iq",
     split_config: Dict | None = None,
 ) -> Tuple[DataLoader, DataLoader, Dict]:
     """Load either a converted ORACLE dataset or a WiSig pickle file."""
@@ -326,6 +356,8 @@ def load_rfdataset(
                 num_workers=num_workers,
                 window_size=info.get("window_size", window_size),
                 normalize=normalize,
+                channels=channels,
+                channel_mode=channel_mode,
                 source_name="oracle",
                 split_manifest=split_manifest,
                 split_config=split_config,

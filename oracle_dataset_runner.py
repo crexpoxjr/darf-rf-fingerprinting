@@ -7,7 +7,6 @@ Usage:
 """
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -26,7 +25,7 @@ def main():
         "--config",
         type=Path,
         default=None,
-        help="Optional YAML config (e.g., configs/oracle_cnn.yaml) to read dataset.path"
+        help="Optional YAML config (e.g., configs/1dcnn.yaml) to read dataset.path"
     )
     parser.add_argument(
         "--oracle-dir",
@@ -67,8 +66,8 @@ def main():
     parser.add_argument(
         "--output-dtype",
         type=str,
-        default="float32",
-        help="Stored dtype for converted I/Q channels (default: float32)"
+        default="float64",
+        help="Stored dtype for converted I/Q channels (default: float64)"
     )
     parser.add_argument(
         "--max-dataset-gib",
@@ -86,26 +85,36 @@ def main():
 
     # Determine paths
     project_root = Path(__file__).parent
+    default_config_path = project_root / "configs" / "oracle_cnn.yaml"
+
+    selected_config_path = args.config
+    if selected_config_path is None and default_config_path.exists():
+        selected_config_path = default_config_path
 
     config_oracle_path = None
+    config_window_size = None
+    config_stride = None
     config_model_classes = None
     config_dataset_max_classes = None
     config_dataset_max_windows = None
     config_dataset_output_dtype = None
     config_dataset_max_gib = None
-    if args.config is not None:
+    if selected_config_path is not None:
         import yaml
 
-        config_path = args.config if args.config.is_absolute() else project_root / args.config
+        config_path = selected_config_path if selected_config_path.is_absolute() else project_root / selected_config_path
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
-        config_oracle_path = config.get("dataset", {}).get("path")
+        dataset_cfg = config.get("dataset", {})
+        config_oracle_path = dataset_cfg.get("path")
+        config_window_size = dataset_cfg.get("window_length")
+        config_stride = dataset_cfg.get("stride")
         config_model_classes = config.get("model", {}).get("classes")
-        config_dataset_max_classes = config.get("dataset", {}).get("max_classes")
-        config_dataset_max_windows = config.get("dataset", {}).get("max_windows_per_recording")
-        config_dataset_output_dtype = config.get("dataset", {}).get("output_dtype")
-        config_dataset_max_gib = config.get("dataset", {}).get("max_dataset_gib")
+        config_dataset_max_classes = dataset_cfg.get("max_classes")
+        config_dataset_max_windows = dataset_cfg.get("max_windows_per_recording")
+        config_dataset_output_dtype = dataset_cfg.get("output_dtype")
+        config_dataset_max_gib = dataset_cfg.get("max_dataset_gib")
 
     oracle_data = args.oracle_dir or config_oracle_path or (
         "src/datasets/ORACLE/dataset2/KRI-16IQImbalances-DemodulatedData"
@@ -133,6 +142,16 @@ def main():
     if config_dataset_max_gib is not None and args.max_dataset_gib == 8.0:
         effective_max_dataset_gib = float(config_dataset_max_gib)
 
+    effective_window_size = args.window_size
+    if config_window_size is not None and args.window_size == 256:
+        effective_window_size = int(config_window_size)
+
+    effective_stride = args.stride
+    if config_stride is not None and args.stride == 128:
+        effective_stride = int(config_stride)
+    elif config_stride is None and config_window_size is not None and args.stride == 128:
+        effective_stride = max(1, int(config_window_size) // 2)
+
     output_dir = args.output_dir or (project_root / "datasets/oracle")
 
     print("=" * 70)
@@ -148,8 +167,10 @@ def main():
 
     print(f"\nInput:  {oracle_data}")
     print(f"Output: {output_dir}")
-    print(f"Window size: {args.window_size} samples")
-    print(f"Stride: {args.stride} samples")
+    if selected_config_path is not None:
+        print(f"Config: {config_path}")
+    print(f"Window size: {effective_window_size} samples")
+    print(f"Stride: {effective_stride} samples")
     if effective_max_classes is not None:
         print(f"Max classes: {effective_max_classes}")
     if effective_max_windows is not None:
@@ -161,8 +182,8 @@ def main():
         print("\n[1/3] Initializing converter...")
         converter = OracleConverter(
             oracle_dir=oracle_data,
-            window_size=args.window_size,
-            stride=args.stride,
+            window_size=effective_window_size,
+            stride=effective_stride,
             max_classes=effective_max_classes,
             max_windows_per_recording=effective_max_windows,
             output_dtype=effective_output_dtype,

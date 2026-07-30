@@ -341,7 +341,16 @@ class OracleConverter:
         return X, y, device_to_label
 
     def assign_window_splits(self, window_metadata: List[Dict], split_config: Dict | None = None, seed: int = 42) -> List[Dict]:
-        """Assign grouped, class-stratified splits to avoid source leakage and class dropouts."""
+        """Assign grouped splits while preventing source leakage.
+
+        Supported protocols:
+                - random_by_window: random window-level split (allows source overlap)
+        - grouped_by_source_file: grouped split stratified by label
+        - grouped_stratified_by_label: alias of grouped_by_source_file
+        - grouped_stratified_by_label_and_distance: grouped split stratified by
+          label with per-label distance-aware allocation when distance metadata
+          is available
+        """
         if not window_metadata:
             return []
 
@@ -352,7 +361,12 @@ class OracleConverter:
             "test": 0.2,
         }
         protocol = split_config.get("protocol", "grouped_by_source_file")
-        if protocol not in {"grouped_by_source_file", "grouped_stratified_by_label"}:
+        if protocol not in {
+            "random_by_window",
+            "grouped_by_source_file",
+            "grouped_stratified_by_label",
+            "grouped_stratified_by_label_and_distance",
+        }:
             return window_metadata
 
         train_ratio = float(split_config.get("train", 0.7))
@@ -366,14 +380,45 @@ class OracleConverter:
         val_ratio /= total
         test_ratio /= total
 
+        if protocol == "random_by_window":
+            indices = np.arange(len(window_metadata))
+            rng = np.random.default_rng(seed)
+            rng.shuffle(indices)
+
+            n = len(indices)
+            train_n = int(np.floor(n * train_ratio))
+            val_n = int(np.floor(n * val_ratio)) if val_ratio > 0 else 0
+            if train_n <= 0:
+                train_n = 1
+            if train_n + val_n >= n:
+                val_n = max(0, n - train_n - 1)
+            test_n = n - train_n - val_n
+
+            split_for_index = {}
+            for idx in indices[:train_n]:
+                split_for_index[int(idx)] = "train"
+            for idx in indices[train_n:train_n + val_n]:
+                split_for_index[int(idx)] = "val"
+            for idx in indices[train_n + val_n:train_n + val_n + test_n]:
+                split_for_index[int(idx)] = "test"
+
+            for i, record in enumerate(window_metadata):
+                record["split"] = split_for_index.get(i, "test")
+                record["split_protocol"] = "random_by_window"
+
+            return window_metadata
+
         # Build one label per source file; each source should map to one device label.
         source_to_label = {}
+        source_to_distance = {}
         for record in window_metadata:
             source = record["source_file"]
             label = int(record["label"])
+            distance = record.get("distance")
             existing = source_to_label.get(source)
             if existing is None:
                 source_to_label[source] = label
+                source_to_distance[source] = distance
             elif existing != label:
                 raise ValueError(f"Source file {source} maps to multiple labels: {existing}, {label}")
 
@@ -383,6 +428,74 @@ class OracleConverter:
 
         rng = np.random.default_rng(seed)
         split_for_source = {}
+
+        if protocol == "grouped_stratified_by_label_and_distance":
+            for label, sources in sorted(label_to_sources.items()):
+                distance_to_sources: Dict[str, List[str]] = {}
+                fallback_sources: List[str] = []
+
+                for source in sorted(sources):
+                    distance = source_to_distance.get(source)
+                    if distance is None:
+                        fallback_sources.append(source)
+                        continue
+                    distance_to_sources.setdefault(str(distance), []).append(source)
+
+                train_sources: List[str] = []
+                eval_pool: List[str] = []
+
+                # For distances with >=2 recordings (common in dataset1), keep
+                # one run in train and one run in eval for overlap.
+                for distance in sorted(distance_to_sources):
+                    dist_sources = list(rng.permutation(distance_to_sources[distance]))
+                    if len(dist_sources) >= 2:
+                        train_sources.append(dist_sources[0])
+                        eval_pool.append(dist_sources[1])
+                        if len(dist_sources) > 2:
+                            train_sources.extend(dist_sources[2:])
+                    elif len(dist_sources) == 1:
+                        fallback_sources.append(dist_sources[0])
+
+                if fallback_sources:
+                    shuffled_fallback = list(rng.permutation(sorted(fallback_sources)))
+                    n_fb = len(shuffled_fallback)
+                    train_n_fb = max(1, int(np.floor(n_fb * train_ratio))) if n_fb > 1 else 1
+                    if train_n_fb >= n_fb:
+                        train_n_fb = n_fb - 1 if n_fb > 1 else 1
+                    train_sources.extend(shuffled_fallback[:train_n_fb])
+                    eval_pool.extend(shuffled_fallback[train_n_fb:])
+
+                # Guarantee at least one train source if possible.
+                if not train_sources and eval_pool:
+                    train_sources.append(eval_pool.pop(0))
+
+                # Split eval pool into val/test.
+                eval_pool = list(rng.permutation(eval_pool))
+                n_eval = len(eval_pool)
+                if n_eval == 0:
+                    val_sources = []
+                    test_sources = []
+                else:
+                    val_n = int(np.floor(n_eval * val_ratio / max(val_ratio + test_ratio, 1e-12))) if val_ratio > 0 else 0
+                    if val_ratio > 0 and n_eval >= 2 and val_n == 0:
+                        val_n = 1
+                    if val_n >= n_eval:
+                        val_n = n_eval - 1
+                    val_sources = eval_pool[:val_n]
+                    test_sources = eval_pool[val_n:]
+
+                for source in train_sources:
+                    split_for_source[source] = "train"
+                for source in val_sources:
+                    split_for_source[source] = "val"
+                for source in test_sources:
+                    split_for_source[source] = "test"
+
+            for record in window_metadata:
+                record["split"] = split_for_source.get(record["source_file"], "test")
+                record["split_protocol"] = "grouped_stratified_by_label_and_distance"
+
+            return window_metadata
 
         # Stratify by device label while keeping whole source files together.
         for label, sources in sorted(label_to_sources.items()):
@@ -488,6 +601,7 @@ class OracleConverter:
             "output_dtype": str(self.output_dtype),
             "max_dataset_gib": self.max_dataset_gib,
         }
+        unique, counts = np.unique(y, return_counts=True)
 
         with open(output_dir / "dataset_info.json", 'w') as f:
             json.dump(info, f, indent=2)
@@ -516,9 +630,15 @@ def main():
 
     X, y, device_mapping = converter.convert_dataset()
 
+    unique, counts = np.unique(y, return_counts=True)
+
+    print("\nClass distribution****:")
+    for cls, count in zip(unique, counts):
+        print(f"Class {cls}: {count}")
+
     # Save to output
     output_dir = Path(__file__).parent / "../../datasets/oracle"
-    converter.save_dataset(X, y, device_mapping, output_dir)
+    converter.save_dataset(X, y, device_mapping, output_dir, window_metadata=converter.window_metadata)
 
     print("\n✓ Conversion complete! Ready for training.")
 

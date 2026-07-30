@@ -20,6 +20,21 @@ from src.datasets.oracle_converter import OracleConverter
 from src.datasets.oracle_loader import load_rfdataset
 from src.evaluation.metrics import calculate_metrics
 from src.models.cnn1d import RF_CNN
+from src.models.cnn1d_multi import RF_CNN_MULTI
+
+
+def build_model(model_cfg: Dict[str, Any], num_classes: int, input_channels: int):
+    model_name = str(model_cfg.get("name", "cnn1d")).lower()
+    in_channels = int(model_cfg.get("in_channels", input_channels))
+
+    if model_name == "cnn1d":
+        return RF_CNN(classes=num_classes), model_name
+    if model_name == "cnn1d_multi":
+        return RF_CNN_MULTI(classes=num_classes, in_channels=in_channels), model_name
+
+    raise ValueError(
+        f"Unsupported model.name '{model_name}'. Supported: 'cnn1d', 'cnn1d_multi'."
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -168,6 +183,8 @@ def build_oracle_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[Da
         num_workers=0,
         window_size=int(dataset_cfg.get("window_length", 256)),
         normalize=bool(dataset_cfg.get("normalize", True)),
+        channels=int(dataset_cfg.get("channels", 2)),
+        channel_mode=str(dataset_cfg.get("channel_mode", "iq")),
         split_config=split_config,
     )
     return train_loader, test_loader, metadata
@@ -193,7 +210,17 @@ def main() -> None:
             f"Warning: model.classes={configured_classes} does not match dataset classes={num_classes}. "
             f"Using dataset class count instead."
         )
-    model = RF_CNN(classes=num_classes)
+    model_cfg = config.get("model", {})
+    model_name = str(model_cfg.get("name", "cnn1d"))
+    if model_name.lower() == "cnn1d_multi" and int(config["dataset"].get("channels", 2)) != 4:
+        print("Warning: model=cnn1d_multi expects dataset.channels=4. Overriding channels to 4 for this run.")
+        config["dataset"]["channels"] = 4
+        train_loader, test_loader, metadata = build_oracle_loaders(config, project_root)
+        num_classes = metadata.get("num_classes", num_classes)
+
+    input_shape = metadata.get("input_shape", [2, int(config["dataset"].get("window_length", 256))])
+    input_channels = int(input_shape[0])
+    model, resolved_model_name = build_model(model_cfg, num_classes, input_channels=input_channels)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
     loss_fn = torch.nn.CrossEntropyLoss()
 
@@ -227,6 +254,22 @@ def main() -> None:
         epoch_losses.append(avg_loss)
         print(f"Epoch {epoch + 1}/{epochs} | loss={avg_loss:.4f}")
 
+    def evaluate_accuracy(loader: DataLoader) -> float:
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for batch in loader:
+                x = batch["x"].to(device)
+                y = batch["y"].to(device)
+                pred = model(x)
+                predicted = pred.argmax(dim=1)
+                correct += (predicted == y).sum().item()
+                total += y.size(0)
+        return float(correct / total) if total > 0 else 0.0
+
+    training_accuracy = evaluate_accuracy(train_loader)
+
     model.eval()
     y_true = []
     y_pred = []
@@ -243,6 +286,7 @@ def main() -> None:
     metrics = calculate_metrics(y_true, y_pred)
     metrics["dataset"] = metadata
     metrics["training"] = {
+        "model_name": resolved_model_name,
         "epochs": epochs,
         "batch_size": int(config["dataset"].get("batch_size", 32)),
         "learning_rate": float(config["training"].get("learning_rate", 0.001)),
@@ -254,6 +298,8 @@ def main() -> None:
         "random_seed": seed,
         "git_commit": get_git_commit_hash(project_root),
         "device": str(device),
+        "training_accuracy": training_accuracy,
+        "testing_accuracy": float(metrics["accuracy"]),
     }
 
     with open(output_dir / "metrics.json", "w", encoding="utf-8") as handle:
@@ -275,11 +321,12 @@ def main() -> None:
     if epoch_losses:
         save_training_curves_png(epoch_losses, output_dir / "training_curves.png")
 
-    torch.save(model.state_dict(), output_dir / "oracle_cnn.pt")
+    model_artifact_name = f"{resolved_model_name}.pt"
+    torch.save(model.state_dict(), output_dir / model_artifact_name)
     print(f"\nSaved artifacts:")
     print(f"  - metrics.json")
     print(f"  - config.yaml")
-    print(f"  - oracle_cnn.pt")
+    print(f"  - {model_artifact_name}")
     print(f"  - confusion_matrix.png")
     print(f"  - confusion_matrix.csv")
     print(f"  - training_curves.png")
@@ -289,6 +336,8 @@ def main() -> None:
     print(f"  Git commit: {metrics['metadata']['git_commit'][:7]}")
     print(f"  Accuracy: {metrics['accuracy']:.4f}")
     print(f"  Macro F1: {metrics['macro_f1']:.4f}")
+    print(f"  Training accuracy: {training_accuracy:.4f}")
+    print(f"  Testing accuracy: {metrics['accuracy']:.4f}")
 
 
 if __name__ == "__main__":

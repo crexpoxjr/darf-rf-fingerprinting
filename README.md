@@ -48,7 +48,20 @@ Although ORACLE metadata may advertise `cf32`, these files are parsed using an i
 ### 1. Convert and test loader
 
 ```bash
-python oracle_dataset_runner.py --test-loader
+python oracle_dataset_runner.py --test-loader --config configs/1dcnn.yaml
+```
+
+`oracle_dataset_runner.py` now auto-loads `configs/oracle_cnn.yaml` when present.
+This means `dataset.path`, class cap, window cap, dtype, and size guard are all
+applied by default without passing `--config` manually.
+
+If you only see one device (often `3123D76`), you are likely converting dataset2.
+To force dataset1 explicitly:
+
+```bash
+python oracle_dataset_runner.py \
+  --oracle-dir src/datasets/ORACLE/dataset1/neu_m044q5210 \
+  --test-loader
 ```
 
 ### 2. Validate conversion
@@ -60,7 +73,7 @@ python validate_oracle_dataset.py --report oracle_report.txt
 ### 3. Train ORACLE CNN (recommended)
 
 ```bash
-python -m src.training.train --config configs/oracle_cnn.yaml
+python -m src.training.train --config configs/1dcnn.yaml
 ```
 
 ### 4. Backward-compatible training command
@@ -73,7 +86,7 @@ This now runs the same config-driven ORACLE pipeline as step 3.
 
 ## Split Protocol
 
-Configured in `configs/oracle_cnn.yaml`:
+Configured in `configs`:
 
 ```yaml
 dataset:
@@ -96,6 +109,32 @@ Each manifest entry includes fields such as dataset name, device ID, source file
 ## Config Guide
 
 Use `configs/oracle_cnn.yaml` as the single source of truth for conversion + training.
+
+### CNN Types
+
+So far, both a Small 1D CNN and a multi-channel 1D CNN is implemented. To use the 1D CNN Model change
+dataset:
+  ...
+  channels: 2
+  channel_mode: iq
+  ...
+model:
+  ...
+  name: cnn1d
+  in_channels: 2
+  ...
+
+To use the 1D multi-channel CNN, change:
+dataset:
+  ...
+  channels: 4
+  channel_mode: iqmp
+  ...
+model:
+  ...
+  name: cnn1d_multi
+  in_channels: 4
+  ...
 
 ### Class Cap
 
@@ -124,12 +163,11 @@ dataset:
   path: src/datasets/ORACLE/dataset1/neu_m044q5210
   max_classes: 8
   max_windows_per_recording: 512
-  output_dtype: float32
+  output_dtype: float64
   max_dataset_gib: 8.0
 ```
 
 - `max_windows_per_recording`: down-samples windows per SigMF file.
-- `output_dtype`: `float32` uses less memory than `float64`.
 - `max_dataset_gib`: fail-fast guard before oversized conversion.
 
 ### Split Settings
@@ -162,6 +200,15 @@ python oracle_dataset_runner.py \
   --max-windows-per-recording 512 \
   --output-dtype float32 \
   --max-dataset-gib 8.0
+```
+
+You can also override source path + geometry directly:
+
+```bash
+python oracle_dataset_runner.py \
+  --oracle-dir src/datasets/ORACLE/dataset1/neu_m044q5210 \
+  --window-size 256 \
+  --stride 128
 ```
 
 ## Per-Run Artifacts
