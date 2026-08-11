@@ -336,7 +336,9 @@ def load_rfdataset(
             with open(info_path, "r") as handle:
                 info = json.load(handle)
 
-            print(f"Loaded ORACLE dataset from {dataset_source}:")
+            dataset_name = str(info.get("dataset_name", "oracle"))
+
+            print(f"Loaded converted {dataset_name} dataset from {dataset_source}:")
             print(f"  X shape: {X.shape}")
             print(f"  y shape: {y.shape}")
             print(f"  Devices: {device_mapping}")
@@ -358,7 +360,7 @@ def load_rfdataset(
                 normalize=normalize,
                 channels=channels,
                 channel_mode=channel_mode,
-                source_name="oracle",
+                source_name=dataset_name,
                 split_manifest=split_manifest,
                 split_config=split_config,
             )

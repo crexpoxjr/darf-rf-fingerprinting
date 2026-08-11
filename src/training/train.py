@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.datasets.oracle_converter import OracleConverter
 from src.datasets.oracle_loader import load_rfdataset
+from src.datasets.wisig_converter import WiSigConverter
 from src.evaluation.metrics import calculate_metrics
 from src.models.cnn1d import RF_CNN
 from src.models.cnn1d_multi import RF_CNN_MULTI
@@ -127,13 +128,41 @@ def save_training_curves_png(losses: list, output_path: Path) -> None:
     plt.close()
 
 
-def build_oracle_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[DataLoader, DataLoader, Dict[str, Any]]:
+def _is_converted_dataset_dir(dataset_path: Path) -> bool:
+    return dataset_path.is_dir() and all(
+        (dataset_path / name).exists()
+        for name in ("X.npy", "y.npy", "device_mapping.json", "dataset_info.json")
+    )
+
+
+def _normalize_split_config(split_config: Dict[str, Any] | float | int | None) -> Dict[str, Any]:
+    if isinstance(split_config, (int, float)):
+        return {
+            "protocol": "grouped_by_source_file",
+            "train": float(split_config),
+            "val": 0.0,
+            "test": max(0.0, 1.0 - float(split_config)),
+        }
+
+    if split_config is None:
+        return {
+            "protocol": "grouped_by_source_file",
+            "train": 0.8,
+            "val": 0.0,
+            "test": 0.2,
+        }
+
+    return split_config
+
+
+def build_dataset_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[DataLoader, DataLoader, Dict[str, Any]]:
     dataset_cfg = config["dataset"]
     model_cfg = config.get("model", {})
+    dataset_name = str(dataset_cfg.get("name", "oracle")).lower()
     dataset_path = resolve_path(dataset_cfg["path"], project_root)
 
     if not dataset_path.exists():
-        raise FileNotFoundError(f"ORACLE dataset path does not exist: {dataset_path}")
+        raise FileNotFoundError(f"{dataset_name} dataset path does not exist: {dataset_path}")
 
     # If dataset.max_classes is not set, default to model.classes to avoid
     # converting more devices than the classifier head can represent.
@@ -141,42 +170,68 @@ def build_oracle_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[Da
     if max_classes_cfg is None:
         max_classes_cfg = model_cfg.get("classes")
 
-    converter = OracleConverter(
-        oracle_dir=dataset_path,
-        window_size=int(dataset_cfg.get("window_length", 256)),
-        stride=int(dataset_cfg.get("window_length", 256) // 2),
-        max_classes=(
-            int(max_classes_cfg)
-            if max_classes_cfg is not None
-            else None
-        ),
-        max_windows_per_recording=(
-            int(dataset_cfg["max_windows_per_recording"])
-            if dataset_cfg.get("max_windows_per_recording") is not None
-            else None
-        ),
-        output_dtype=str(dataset_cfg.get("output_dtype", "float32")),
-        max_dataset_gib=float(dataset_cfg.get("max_dataset_gib", 8.0)),
+    split_config = _normalize_split_config(dataset_cfg.get("split", 0.8))
+    output_dir = resolve_path(
+        dataset_cfg.get("output_dir", f"datasets/{dataset_name}"),
+        project_root,
     )
 
-    split_config = dataset_cfg.get("split", 0.8)
-    if isinstance(split_config, (int, float)):
-        split_config = {
-            "protocol": "grouped_by_source_file",
-            "train": float(split_config),
-            "val": 0.0,
-            "test": max(0.0, 1.0 - float(split_config)),
-        }
+    load_source = dataset_path
+    if not _is_converted_dataset_dir(dataset_path):
+        if dataset_name == "oracle":
+            converter = OracleConverter(
+                oracle_dir=dataset_path,
+                window_size=int(dataset_cfg.get("window_length", 256)),
+                stride=int(dataset_cfg.get("stride", dataset_cfg.get("window_length", 256) // 2)),
+                max_classes=(
+                    int(max_classes_cfg)
+                    if max_classes_cfg is not None
+                    else None
+                ),
+                max_windows_per_recording=(
+                    int(dataset_cfg["max_windows_per_recording"])
+                    if dataset_cfg.get("max_windows_per_recording") is not None
+                    else None
+                ),
+                output_dtype=str(dataset_cfg.get("output_dtype", "float32")),
+                max_dataset_gib=float(dataset_cfg.get("max_dataset_gib", 8.0)),
+            )
+        elif dataset_name == "wisig":
+            converter = WiSigConverter(
+                wisig_path=dataset_path,
+                window_size=int(dataset_cfg.get("window_length", 256)),
+                max_classes=(
+                    int(max_classes_cfg)
+                    if max_classes_cfg is not None
+                    else None
+                ),
+                max_windows_per_source=(
+                    int(dataset_cfg["max_windows_per_source"])
+                    if dataset_cfg.get("max_windows_per_source") is not None
+                    else None
+                ),
+                output_dtype=str(dataset_cfg.get("output_dtype", "float32")),
+            )
+        else:
+            raise ValueError(
+                f"Unsupported dataset.name '{dataset_name}'. Supported values are 'oracle' and 'wisig'."
+            )
 
-    X, y, device_mapping = converter.convert_dataset(
-        split_config=split_config,
-        seed=int(dataset_cfg.get("seed", 42)),
-    )
-    output_dir = resolve_path(dataset_cfg.get("output_dir", "datasets/oracle"), project_root)
-    converter.save_dataset(X, y, device_mapping, output_dir, window_metadata=converter.window_metadata)
+        X, y, device_mapping = converter.convert_dataset(
+            split_config=split_config,
+            seed=int(dataset_cfg.get("seed", 42)),
+        )
+        converter.save_dataset(
+            X,
+            y,
+            device_mapping,
+            output_dir,
+            window_metadata=converter.window_metadata,
+        )
+        load_source = output_dir
 
     train_loader, test_loader, metadata = load_rfdataset(
-        output_dir,
+        load_source,
         split_ratio=float(split_config.get("train", 0.8)),
         batch_size=int(dataset_cfg.get("batch_size", 32)),
         shuffle_train=True,
@@ -191,7 +246,7 @@ def build_oracle_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[Da
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train a CNN on the ORACLE dataset")
+    parser = argparse.ArgumentParser(description="Train a CNN on an RF fingerprint dataset")
     parser.add_argument("--config", type=Path, required=True, help="Path to YAML config")
     args = parser.parse_args()
 
@@ -201,7 +256,7 @@ def main() -> None:
     seed = int(config["dataset"].get("seed", 42))
     set_seed(seed)
 
-    train_loader, test_loader, metadata = build_oracle_loaders(config, project_root)
+    train_loader, test_loader, metadata = build_dataset_loaders(config, project_root)
 
     configured_classes = config["model"].get("classes")
     num_classes = metadata.get("num_classes", 2)
@@ -215,7 +270,7 @@ def main() -> None:
     if model_name.lower() == "cnn1d_multi" and int(config["dataset"].get("channels", 2)) != 4:
         print("Warning: model=cnn1d_multi expects dataset.channels=4. Overriding channels to 4 for this run.")
         config["dataset"]["channels"] = 4
-        train_loader, test_loader, metadata = build_oracle_loaders(config, project_root)
+        train_loader, test_loader, metadata = build_dataset_loaders(config, project_root)
         num_classes = metadata.get("num_classes", num_classes)
 
     input_shape = metadata.get("input_shape", [2, int(config["dataset"].get("window_length", 256))])

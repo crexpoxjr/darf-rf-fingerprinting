@@ -37,7 +37,8 @@ def calculate_metrics(
         precision_score(
             y_true,
             y_pred,
-            average=None
+            average=None,
+            zero_division=0
         ).tolist()
     )
 
@@ -46,7 +47,8 @@ def calculate_metrics(
         recall_score(
             y_true,
             y_pred,
-            average=None
+            average=None,
+            zero_division=0
         ).tolist()
     )
 
@@ -63,7 +65,8 @@ def calculate_metrics(
         classification_report(
             y_true,
             y_pred,
-            output_dict=True
+            output_dict=True,
+            zero_division=0
         )
     )
 

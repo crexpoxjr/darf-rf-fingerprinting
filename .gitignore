@@ -8,6 +8,7 @@ __pycache__/
 KRI-16IQImbalances-DemodulatedData/
 neu_m044q5210/
 datasets/oracle/
+datasets/wisig/
 results/
 src/datasets/WiSig
 

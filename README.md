@@ -1,12 +1,12 @@
 # DARF RF Fingerprinting
 
-Device analog/RF fingerprint classification using ORACLE SigMF recordings.
+Device analog/RF fingerprint classification using ORACLE SigMF recordings and WiSig pickle datasets.
 
 ## Goal
 
 Build a reproducible RF fingerprinting pipeline that:
 
-- converts ORACLE raw SigMF files to model-ready I/Q windows,
+- converts ORACLE raw SigMF files or WiSig pickle payloads to model-ready I/Q windows,
 - uses a leakage-aware grouped split protocol,
 - trains a 1D CNN, and
 - saves complete research artifacts for each run.
@@ -21,9 +21,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Current ORACLE Pipeline
+## Current Pipeline
 
-1. Convert raw SigMF recordings to `X.npy` / `y.npy` with per-window metadata.
+1. Convert raw RF recordings to `X.npy` / `y.npy` with per-window metadata.
 2. Build grouped train/val/test partitions by source recording.
 3. Train CNN from YAML config.
 4. Save metrics and artifacts for reproducibility.
@@ -32,8 +32,10 @@ Main components:
 
 - `oracle_dataset_runner.py`: conversion entry point
 - `src/datasets/oracle_converter.py`: SigMF parse + windowing + split manifest
+- `src/datasets/wisig_converter.py`: WiSig pickle parse + split manifest
 - `src/datasets/oracle_loader.py`: DataLoader and split-manifest-aware partitioning
 - `src/training/train.py`: config-driven training + artifact generation
+- `src/evaluation/robustness_suite.py`: perturbation and domain-shift robustness evaluation
 - `train_oracle_cnn.py`: compatibility wrapper (delegates to `src/training/train.py`)
 - `validate_oracle_dataset.py`: converted dataset validation
 
@@ -75,6 +77,38 @@ python validate_oracle_dataset.py --report oracle_report.txt
 ```bash
 python -m src.training.train --config configs/1dcnn.yaml
 ```
+
+### 3b. Train on WiSig
+
+```bash
+python -m src.training.train --config configs/wisig_1dcnn.yaml
+```
+
+The training entry point now accepts `dataset.name: wisig` and will convert a
+WiSig pickle payload into the same saved `X.npy` / `y.npy` / `split_manifest.json`
+layout used by ORACLE runs.
+
+### 5. Run robustness evaluation
+
+```bash
+python -m src.evaluation.robustness_suite \
+  --results-dir results/wisig_1dcnn
+```
+
+The robustness suite evaluates:
+
+- SNR sweep: clean, 30, 20, 10, 5, and 0 dB
+- carrier-frequency offset: controlled normalized CFO values
+- phase rotation: static phase bias and random per-sample rotation
+- timing offset: integer shifts and fractional delays
+- fading and multipath: Rayleigh, Rician, and a simple 3-tap channel
+- cross-receiver split: retrain on one receiver subset and test on held-out receivers
+- cross-day split: retrain on earlier capture days and test on later days when multiple days exist
+- adversarial perturbation: FGSM and PGD with bounded I/Q perturbations
+
+The command writes `robustness_report.json` into the selected run directory by default.
+For WiSig `SingleDay.pkl`, cross-day evaluation is expected to skip because the converted
+dataset currently contains only one capture day.
 
 ### 4. Backward-compatible training command
 
