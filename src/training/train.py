@@ -22,9 +22,11 @@ from src.datasets.wisig_converter import WiSigConverter
 from src.evaluation.metrics import calculate_metrics
 from src.models.cnn1d import RF_CNN
 from src.models.cnn1d_multi import RF_CNN_MULTI
+from src.models.hypernea_proto import HyperNEAPrototype
+from src.training.neuroevolution import evolve_model
 
 
-def build_model(model_cfg: Dict[str, Any], num_classes: int, input_channels: int):
+def build_model(model_cfg: Dict[str, Any], num_classes: int, input_channels: int, window_size: int = 256):
     model_name = str(model_cfg.get("name", "cnn1d")).lower()
     in_channels = int(model_cfg.get("in_channels", input_channels))
 
@@ -32,9 +34,20 @@ def build_model(model_cfg: Dict[str, Any], num_classes: int, input_channels: int
         return RF_CNN(classes=num_classes), model_name
     if model_name == "cnn1d_multi":
         return RF_CNN_MULTI(classes=num_classes, in_channels=in_channels), model_name
+    if model_name == "hypernea_proto":
+        return (
+            HyperNEAPrototype(
+                classes=num_classes,
+                input_channels=in_channels,
+                window_size=int(model_cfg.get("window_size", window_size)),
+                hidden_size=int(model_cfg.get("hidden_size", 32)),
+                cppn_hidden=int(model_cfg.get("cppn_hidden", 24)),
+            ),
+            model_name,
+        )
 
     raise ValueError(
-        f"Unsupported model.name '{model_name}'. Supported: 'cnn1d', 'cnn1d_multi'."
+        f"Unsupported model.name '{model_name}'. Supported: 'cnn1d', 'cnn1d_multi', 'hypernea_proto'."
     )
 
 
@@ -115,13 +128,13 @@ def save_confusion_matrix_csv(cm: np.ndarray, output_path: Path, class_labels: l
             writer.writerow([label] + cm[i].tolist())
 
 
-def save_training_curves_png(losses: list, output_path: Path) -> None:
-    """Save training loss curve as PNG."""
+def save_training_curves_png(losses: list, output_path: Path, title: str = "Training Loss Curve", y_label: str = "Loss") -> None:
+    """Save training curve as PNG."""
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(range(1, len(losses) + 1), losses, marker="o", linestyle="-", linewidth=2, markersize=5)
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title("Training Loss Curve")
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_path, dpi=100, bbox_inches="tight")
@@ -275,9 +288,12 @@ def main() -> None:
 
     input_shape = metadata.get("input_shape", [2, int(config["dataset"].get("window_length", 256))])
     input_channels = int(input_shape[0])
-    model, resolved_model_name = build_model(model_cfg, num_classes, input_channels=input_channels)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
-    loss_fn = torch.nn.CrossEntropyLoss()
+    model, resolved_model_name = build_model(
+        model_cfg,
+        num_classes,
+        input_channels=input_channels,
+        window_size=int(config["dataset"].get("window_length", 256)),
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -290,24 +306,60 @@ def main() -> None:
     if split_manifest_path.exists():
         shutil.copy2(split_manifest_path, output_dir / "split_manifest.json")
 
-    epochs = int(config["training"].get("epochs", 10))
     epoch_losses = []
-    for epoch in range(epochs):
-        model.train()
-        running_loss = 0.0
-        for batch in train_loader:
-            x = batch["x"].to(device)
-            y = batch["y"].to(device)
-            pred = model(x)
-            loss = loss_fn(pred, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
+    training_method = str(config["training"].get("method", "adam")).lower()
+    if resolved_model_name == "hypernea_proto":
+        training_method = "neuroevolution"
 
-        avg_loss = running_loss / len(train_loader)
-        epoch_losses.append(avg_loss)
-        print(f"Epoch {epoch + 1}/{epochs} | loss={avg_loss:.4f}")
+    if training_method == "neuroevolution":
+        epoch_losses, evolution_summary = evolve_model(
+            model,
+            train_loader,
+            device,
+            config["training"],
+            seed=seed,
+        )
+        training_summary = {
+            "model_name": resolved_model_name,
+            "epochs": int(len(epoch_losses)),
+            "batch_size": int(config["dataset"].get("batch_size", 32)),
+            "learning_rate": None,
+            "optimizer": evolution_summary["algorithm"],
+            "loss_function": "fitness=train_accuracy",
+            "final_loss": None,
+            "best_fitness": float(evolution_summary["best_fitness"]),
+            "evolution": evolution_summary,
+        }
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
+        loss_fn = torch.nn.CrossEntropyLoss()
+        epochs = int(config["training"].get("epochs", 10))
+        for epoch in range(epochs):
+            model.train()
+            running_loss = 0.0
+            for batch in train_loader:
+                x = batch["x"].to(device)
+                y = batch["y"].to(device)
+                pred = model(x)
+                loss = loss_fn(pred, y)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+
+            avg_loss = running_loss / len(train_loader)
+            epoch_losses.append(avg_loss)
+            print(f"Epoch {epoch + 1}/{epochs} | loss={avg_loss:.4f}")
+
+        training_summary = {
+            "model_name": resolved_model_name,
+            "epochs": epochs,
+            "batch_size": int(config["dataset"].get("batch_size", 32)),
+            "learning_rate": float(config["training"].get("learning_rate", 0.001)),
+            "optimizer": "Adam",
+            "loss_function": "CrossEntropyLoss",
+            "final_loss": float(epoch_losses[-1]) if epoch_losses else None,
+        }
 
     def evaluate_accuracy(loader: DataLoader) -> float:
         model.eval()
@@ -340,15 +392,7 @@ def main() -> None:
 
     metrics = calculate_metrics(y_true, y_pred)
     metrics["dataset"] = metadata
-    metrics["training"] = {
-        "model_name": resolved_model_name,
-        "epochs": epochs,
-        "batch_size": int(config["dataset"].get("batch_size", 32)),
-        "learning_rate": float(config["training"].get("learning_rate", 0.001)),
-        "optimizer": "Adam",
-        "loss_function": "CrossEntropyLoss",
-        "final_loss": float(epoch_losses[-1]) if epoch_losses else None,
-    }
+    metrics["training"] = training_summary
     metrics["metadata"] = {
         "random_seed": seed,
         "git_commit": get_git_commit_hash(project_root),
@@ -374,7 +418,15 @@ def main() -> None:
 
     # Save training curves
     if epoch_losses:
-        save_training_curves_png(epoch_losses, output_dir / "training_curves.png")
+        if training_method == "neuroevolution":
+            save_training_curves_png(
+                epoch_losses,
+                output_dir / "training_curves.png",
+                title="Evolution Fitness Curve",
+                y_label="Best Fitness",
+            )
+        else:
+            save_training_curves_png(epoch_losses, output_dir / "training_curves.png")
 
     model_artifact_name = f"{resolved_model_name}.pt"
     torch.save(model.state_dict(), output_dir / model_artifact_name)

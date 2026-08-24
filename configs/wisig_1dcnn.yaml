@@ -1,6 +1,6 @@
 dataset:
   name: wisig
-  path: src/datasets/WiSig/SingleDay.pkl
+  path: src/datasets/WiSig/ManySig.pkl
   output_dir: datasets/wisig
   window_length: 256
   channels: 2

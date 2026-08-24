@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from src.evaluation.metrics import calculate_metrics
+from src.training.neuroevolution import evolve_model
 from src.training.train import build_dataset_loaders, build_model, load_config, resolve_path, set_seed
 
 
@@ -326,7 +327,12 @@ def load_run_context(project_root: Path, results_dir: Path, config_path: Path | 
     model_cfg = config["model"]
     model_name = str(model_cfg.get("name", "cnn1d")).lower()
     input_channels = int(dataset_cfg.get("channels", 2))
-    model, resolved_model_name = build_model(model_cfg, len(device_mapping), input_channels=input_channels)
+    model, resolved_model_name = build_model(
+        model_cfg,
+        len(device_mapping),
+        input_channels=input_channels,
+        window_size=int(dataset_cfg.get("window_length", X.shape[2])),
+    )
     model_path = resolved_results_dir / f"{resolved_model_name}.pt"
     if not model_path.exists():
         raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
@@ -391,10 +397,13 @@ def train_and_evaluate_split(
     batch_size = int(dataset_cfg.get("batch_size", 32))
     epochs = int(epochs_override if epochs_override is not None else config["training"].get("epochs", 10))
 
-    model, _ = build_model(model_cfg, int(len(np.unique(y))), input_channels=channels)
+    model, _ = build_model(
+        model_cfg,
+        int(len(np.unique(y))),
+        input_channels=channels,
+        window_size=int(dataset_cfg.get("window_length", X.shape[2])),
+    )
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
-    loss_fn = torch.nn.CrossEntropyLoss()
 
     train_dataset = RawSignalDataset(X[train_indices], y[train_indices], channels=channels, normalize=normalize)
     test_dataset = RawSignalDataset(X[test_indices], y[test_indices], channels=channels, normalize=normalize)
@@ -402,19 +411,28 @@ def train_and_evaluate_split(
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
     losses = []
-    for _ in range(epochs):
-        model.train()
-        running_loss = 0.0
-        for batch in train_loader:
-            x = batch["x"].to(device)
-            labels = batch["y"].to(device)
-            logits = model(x)
-            loss = loss_fn(logits, labels)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-        losses.append(running_loss / max(len(train_loader), 1))
+    if str(model_cfg.get("name", "cnn1d")).lower() == "hypernea_proto":
+        local_training_cfg = dict(config["training"])
+        local_training_cfg["neuroevolution"] = dict(config["training"].get("neuroevolution", {}))
+        local_training_cfg["neuroevolution"].setdefault("generations", epochs)
+        losses, evolution_summary = evolve_model(model, train_loader, device, local_training_cfg, seed=seed)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=float(config["training"].get("learning_rate", 0.001)))
+        loss_fn = torch.nn.CrossEntropyLoss()
+        for _ in range(epochs):
+            model.train()
+            running_loss = 0.0
+            for batch in train_loader:
+                x = batch["x"].to(device)
+                labels = batch["y"].to(device)
+                logits = model(x)
+                loss = loss_fn(logits, labels)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+            losses.append(running_loss / max(len(train_loader), 1))
+        evolution_summary = None
 
     model.eval()
     y_true: List[int] = []
@@ -433,6 +451,8 @@ def train_and_evaluate_split(
     metrics["num_test"] = int(len(test_indices))
     metrics["epochs"] = int(epochs)
     metrics["final_loss"] = float(losses[-1]) if losses else None
+    if evolution_summary is not None:
+        metrics["evolution"] = evolution_summary
     return metrics
 
 

@@ -35,9 +35,11 @@ Main components:
 - `src/datasets/wisig_converter.py`: WiSig pickle parse + split manifest
 - `src/datasets/oracle_loader.py`: DataLoader and split-manifest-aware partitioning
 - `src/training/train.py`: config-driven training + artifact generation
+- `src/training/neuroevolution.py`: simple population-based evolutionary trainer for indirect-encoding prototypes
 - `src/evaluation/robustness_suite.py`: perturbation and domain-shift robustness evaluation
 - `train_oracle_cnn.py`: compatibility wrapper (delegates to `src/training/train.py`)
 - `validate_oracle_dataset.py`: converted dataset validation
+- `src/models/hypernea_proto.py`: HyperNEAT-inspired neuroevolution prototype
 
 ## Dtype Note (Important)
 
@@ -87,6 +89,18 @@ python -m src.training.train --config configs/wisig_1dcnn.yaml
 The training entry point now accepts `dataset.name: wisig` and will convert a
 WiSig pickle payload into the same saved `X.npy` / `y.npy` / `split_manifest.json`
 layout used by ORACLE runs.
+
+### 3c. Train the HyperNEA prototype
+
+```bash
+python -m src.training.train --config configs/wisig_hypernea_proto.yaml
+```
+
+This prototype is intentionally not a full HyperNEAT implementation. Instead, it
+uses a small CPPN-like genome to indirectly generate the weights of a fixed RF
+classifier substrate, then optimizes that genome with a simple evolutionary loop.
+The goal is to make neuroevolution work inside the current config, dataset, and
+artifact pipeline before attempting a fuller HyperNEAT implementation.
 
 ### 5. Run robustness evaluation
 
