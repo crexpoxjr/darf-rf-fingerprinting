@@ -210,6 +210,10 @@ def build_dataset_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[D
                 max_dataset_gib=float(dataset_cfg.get("max_dataset_gib", 8.0)),
             )
         elif dataset_name == "wisig":
+            max_windows_per_source_cfg = dataset_cfg.get("max_windows_per_source")
+            if max_windows_per_source_cfg is None:
+                max_windows_per_source_cfg = dataset_cfg.get("max_windows_per_recording")
+
             converter = WiSigConverter(
                 wisig_path=dataset_path,
                 window_size=int(dataset_cfg.get("window_length", 256)),
@@ -219,8 +223,8 @@ def build_dataset_loaders(config: Dict[str, Any], project_root: Path) -> Tuple[D
                     else None
                 ),
                 max_windows_per_source=(
-                    int(dataset_cfg["max_windows_per_source"])
-                    if dataset_cfg.get("max_windows_per_source") is not None
+                    int(max_windows_per_source_cfg)
+                    if max_windows_per_source_cfg is not None
                     else None
                 ),
                 output_dtype=str(dataset_cfg.get("output_dtype", "float32")),

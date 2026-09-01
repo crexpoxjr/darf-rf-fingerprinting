@@ -90,6 +90,12 @@ The training entry point now accepts `dataset.name: wisig` and will convert a
 WiSig pickle payload into the same saved `X.npy` / `y.npy` / `split_manifest.json`
 layout used by ORACLE runs.
 
+For the 4-channel I/Q+magnitude+phase model on WiSig, use:
+
+```bash
+python -m src.training.train --config configs/multi_1dcnn.yaml
+```
+
 ### 3c. Train the HyperNEA prototype
 
 ```bash
@@ -290,5 +296,5 @@ If your subset currently has only one device class, you may observe near-perfect
 ## References
 
 - ORACLE dataset: https://genesys-lab.org/oracle
-- SigMF: https://sigmf.io/
+- SigMF: https://sigmf.org/
 - WiSig datasets: https://cores.ee.ucla.edu/downloads/datasets/wisig/

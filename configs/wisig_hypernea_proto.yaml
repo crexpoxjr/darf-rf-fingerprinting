@@ -1,13 +1,13 @@
 dataset:
   name: wisig
-  path: src/datasets/WiSig/SingleDay.pkl
+  path: src/datasets/WiSig/ManySig.pkl
   output_dir: datasets/wisig
   window_length: 256
   channels: 2
   channel_mode: iq
   max_classes: 8
   max_windows_per_source: 128
-  output_dtype: float32
+  output_dtype: float64
   normalize: true
   split:
     protocol: grouped_stratified_by_label_and_distance
@@ -31,7 +31,7 @@ training:
   output_dir: results/wisig_hypernea_proto
   neuroevolution:
     population_size: 16
-    generations: 16
+    generations: 20
     elite_fraction: 0.25
     mutation_std: 0.10
     crossover_rate: 0.35

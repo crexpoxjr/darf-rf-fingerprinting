@@ -114,6 +114,8 @@ def _load_wisig_dataset(
     num_workers: int = 0,
     window_size: int = 256,
     normalize: bool = True,
+    channels: int = 2,
+    channel_mode: str = "iq",
 ) -> Tuple[DataLoader, DataLoader, Dict]:
     """Load a WiSig pickle file into train/test loaders."""
     dataset_path = Path(dataset_path)
@@ -210,6 +212,8 @@ def _load_wisig_dataset(
         num_workers=num_workers,
         window_size=window_size,
         normalize=normalize,
+        channels=channels,
+        channel_mode=channel_mode,
         source_name="wisig",
     )
 
@@ -320,6 +324,8 @@ def load_rfdataset(
             num_workers=num_workers,
             window_size=window_size,
             normalize=normalize,
+            channels=channels,
+            channel_mode=channel_mode,
         )
 
     if dataset_source.is_dir():
@@ -374,6 +380,8 @@ def load_rfdataset(
                 num_workers=num_workers,
                 window_size=window_size,
                 normalize=normalize,
+                channels=channels,
+                channel_mode=channel_mode,
             )
 
     raise FileNotFoundError(
