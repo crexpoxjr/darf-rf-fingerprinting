@@ -1,12 +1,13 @@
 dataset:
-  name: wisig
-  path: src/datasets/WiSig/ManySig.pkl
-  output_dir: datasets/wisig_multi
-  window_length: 128
+  name: oracle
+  path: src/datasets/ORACLE/dataset1/neu_m044q5210
+  output_dir: datasets/oracle_multi
+  window_length: 64
   channels: 4
   channel_mode: iqmp
   max_classes: 8
-  max_windows_per_source: 256
+  max_windows_per_source: 64
+
   output_dtype: float64
   normalize: true
   split:
@@ -25,4 +26,4 @@ model:
 training:
   learning_rate: 0.003
   epochs: 40
-  output_dir: results/multi_1dcnn
+  output_dir: results/oracle_multi_1dcnn

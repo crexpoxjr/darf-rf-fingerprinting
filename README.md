@@ -108,6 +108,15 @@ classifier substrate, then optimizes that genome with a simple evolutionary loop
 The goal is to make neuroevolution work inside the current config, dataset, and
 artifact pipeline before attempting a fuller HyperNEAT implementation.
 
+For ORACLE dataset1, use:
+
+```bash
+python -m src.training.train --config configs/oracle_hypernea_proto.yaml
+```
+
+This runs the same indirect-encoding prototype on ORACLE's grouped split using
+the existing converter and manifest pipeline.
+
 ### 5. Run robustness evaluation
 
 ```bash

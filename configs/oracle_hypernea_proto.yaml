@@ -1,0 +1,38 @@
+dataset:
+  name: oracle
+  path: src/datasets/ORACLE/dataset1/neu_m044q5210
+  output_dir: datasets/oracle_hypernea
+  window_length: 512
+  channels: 2
+  channel_mode: iq
+  max_classes: 8
+  max_windows_per_recording: 256
+  output_dtype: float64
+  normalize: true
+  split:
+    protocol: grouped_stratified_by_label_and_distance
+    train: 0.7
+    val: 0.1
+    test: 0.2
+  batch_size: 64
+  seed: 42
+
+model:
+  name: hypernea_proto
+  classes: 8
+  in_channels: 2
+  window_size: 512
+  hidden_size: 32
+  cppn_hidden: 24
+
+training:
+  method: neuroevolution
+  epochs: 40
+  output_dir: results/oracle_hypernea_proto
+  neuroevolution:
+    population_size: 16
+    generations: 20
+    elite_fraction: 0.25
+    mutation_std: 0.10
+    crossover_rate: 0.35
+    eval_batches: 8
